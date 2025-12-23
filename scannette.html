@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Lecture Data Matrix GS1</title>
+
+<style>
+body { font-family: Arial, sans-serif; background:#f4f6f8; padding:20px; }
+.container { max-width:900px; margin:auto; }
+h1 { text-align:center; }
+input { width:100%; font-size:20px; padding:15px; border:2px solid #1a73e8; border-radius:6px; }
+.scan { background:#fff; border-left:6px solid #1a73e8; margin-top:15px; padding:15px; }
+.ok { border-left-color:#34a853; }
+.err { border-left-color:#ea4335; }
+.summary { background:#e8f0fe; padding:10px; margin-top:10px; }
+.gs1-table { width:100%; border-collapse:collapse; margin-top:10px; }
+.gs1-table th, .gs1-table td { border:1px solid #ccc; padding:8px; }
+.gs1-table th { background:#1a73e8; color:white; }
+.expired { color:red; font-weight:bold; }
+</style>
+</head>
+
+<body>
+<div class="container">
+<h1>Lecture Data Matrix / GS1</h1>
+<input id="scanInput" placeholder="Scanner un Data Matrix">
+<div id="result"></div>
+</div>
+
+<script>
+const GS1_AI = {
+  "01": { label:"GTIN", length:14, fixed:true },
+  "17": { label:"Date d'expiration", length:6, fixed:true },
+  "15": { label:"DDM", length:6, fixed:true },
+  "11": { label:"Date de production", length:6, fixed:true },
+  "10": { label:"Lot", fixed:false },
+  "21": { label:"Numéro de série", fixed:false }
+};
+
+const FNC1 = "\u001D";
+const scanInput = document.getElementById("scanInput");
+const result = document.getElementById("result");
+
+/* 🔒 focus permanent pour les scanners */
+scanInput.focus();
+setInterval(() => {
+  if (document.activeElement !== scanInput) {
+    scanInput.focus();
+  }
+}, 300);
+
+/* lecture scan */
+scanInput.addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    if (scanInput.value.trim()) {
+      processScan(scanInput.value.trim());
+      scanInput.value = "";
+    }
+  }
+});
+
+function processScan(data) {
+  const div = document.createElement("div");
+  div.className = "scan";
+
+  const parsed = decodeGS1(data);
+
+  if (!parsed.valid) {
+    div.classList.add("err");
+    div.innerHTML = `
+      <b>❌ Code non GS1</b><br>
+      <b>Valeur brute :</b> ${data}
+    `;
+  } else {
+    div.classList.add("ok");
+    div.innerHTML = "<b>✔ Scan OK</b>";
+    div.innerHTML += buildSummary(parsed.fields);
+    div.innerHTML += buildTable(parsed.fields);
+  }
+
+  result.prepend(div);
+}
+
+function decodeGS1(data) {
+  let raw = data.replace(/[()]/g, "");
+  let i = 0;
+  let fields = [];
+
+  while (i < raw.length) {
+    const ai = raw.substr(i, 2);
+    const def = GS1_AI[ai];
+    if (!def) return { valid: false };
+
+    i += 2;
+    let value = "";
+
+    if (def.fixed) {
+      value = raw.substr(i, def.length);
+      i += def.length;
+    } else {
+      let fncPos = raw.indexOf(FNC1, i);
+      let nextPos = fncPos !== -1 ? fncPos : raw.length;
+
+      if (fncPos === -1) {
+        for (let p = i + 1; p < raw.length - 1; p++) {
+          const candidate = raw.substr(p, 2);
+          const candDef = GS1_AI[candidate];
+          if (candDef) {
+            if (
+              (candDef.fixed && raw.length >= p + 2 + candDef.length) ||
+              (!candDef.fixed)
+            ) {
+              nextPos = p;
+              break;
+            }
+          }
+        }
+      }
+
+      value = raw.substring(i, nextPos);
+      i = nextPos + (raw[nextPos] === FNC1 ? 1 : 0);
+    }
+
+    fields.push({
+      ai,
+      label: def.label,
+      value: formatValue(ai, value)
+    });
+  }
+
+  return { valid: true, fields };
+}
+
+function formatValue(ai, value) {
+  if (["17","15","11"].includes(ai)) {
+    const d = `20${value.slice(0,2)}-${value.slice(2,4)}-${value.slice(4,6)}`;
+    if (ai === "17" && new Date(d) < new Date())
+      return `<span class="expired">${d}</span>`;
+    return d;
+  }
+  return value;
+}
+
+function buildSummary(fields) {
+  const get = ai => fields.find(f => f.ai === ai)?.value || "-";
+  return `
+    <div class="summary">
+      <b>GTIN (01) :</b> ${get("01")} |
+      <b>Lot (10) :</b> ${get("10")} |
+      <b>N° de série (21) :</b> ${get("21")} |
+      <b>Date de fabrication (11) :</b> ${get("11")}
+    </div>
+  `;
+}
+
+function buildTable(fields) {
+  let html = `<table class="gs1-table"><tr><th>AI</th><th>Champ</th><th>Valeur</th></tr>`;
+  fields.forEach(f => {
+    html += `<tr><td>${f.ai}</td><td>${f.label}</td><td>${f.value}</td></tr>`;
+  });
+  return html + "</table>";
+}
+</script>
+</body>
+</html>
